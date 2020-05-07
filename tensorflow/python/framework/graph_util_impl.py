@@ -27,6 +27,7 @@ from tensorflow.core.framework import attr_value_pb2
 from tensorflow.core.framework import graph_pb2
 from tensorflow.core.framework import node_def_pb2
 from tensorflow.python.framework import dtypes
+from tensorflow.python.framework import importer
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import tensor_util
 from tensorflow.python.platform import tf_logging as logging
@@ -315,7 +316,8 @@ def convert_variables_to_constants(sess,
                                    input_graph_def,
                                    output_node_names,
                                    variable_names_whitelist=None,
-                                   variable_names_blacklist=None):
+                                   variable_names_blacklist=None,
+                                   check_and_revert_if_type_mistmatch=False):
   """Replaces all the variables in a graph with constants of the same values.
 
   If you have a trained graph containing Variable ops, it can be convenient to
@@ -520,9 +522,114 @@ def convert_variables_to_constants(sess,
                                 variable_names_whitelist,
                                 variable_names_blacklist)
 
+  if check_and_revert_if_type_mistmatch:
+    output_graph_def = _fix_types_match_conversion(
+        inference_graph, variables_data_map, output_graph_def)
   output_graph_def.library.CopyFrom(inference_graph.library)
   logging.info("Converted %d variables to const ops.", how_many_converted)
+  # Final check if graph is importable, This will validate if the conversion was done correctly
+  try:
+    with ops.Graph().as_default():
+      importer.import_graph_def(output_graph_def)
+  except ValueError as e:
+    logging.warning(
+        "This graph can't be imported because of the following error %s" % (e))
   return output_graph_def
+
+
+def _get_tensor_name(tensor):
+  """Returns a list of string names for the tensors specified."""
+  return tensor.name.split(":")[0]
+
+
+def _fix_types_match_conversion(input_graph_def,
+                                variables_data_map, output_graph_def):
+  """
+  This function compares the converted variables between initial and final graph
+  If converted, operators that are connected should have been modified to accept
+    new change. If not, add back the variable, tie it to an assign, and put
+    a control edge to the calling operator.
+
+  1. List of variables to constants
+  2. Get operations with new constants as inputs
+  3. If input type of that tensor is Resource, check if nodedef has
+      changed in outputgraphdef
+  4. if not return ops to change and variable names
+  """
+  recreated_vars = {}
+  filtered_operators = {}
+  variables = {}
+  with ops.Graph().as_default() as input_graph:
+    try:
+      importer.import_graph_def(input_graph_def, name="")
+    except ValueError as e:
+      logging.warning(
+          "The input graph can't be imported because of the following error %s"
+          % (e))
+      return False
+
+    operators_with_vars = {}
+    for input_node in input_graph.get_operations():
+      input_types = input_node._input_types
+      if input_node.type == "VarHandleOp":
+        variables[input_node.name] = input_node.node_def
+      for ii, input_t in enumerate(input_node.inputs):
+        if _get_tensor_name(input_t) in variables_data_map:
+          # Found a variable as input
+          if input_types[ii] == dtypes.resource:
+            operators_with_vars[input_node.name] = (
+                input_node, ii, _get_tensor_name(input_t))
+  for node in output_graph_def.node:
+    if node.name in operators_with_vars:
+      if node == operators_with_vars[node.name][0].node_def:
+        filtered_operators[node.name] = (
+            operators_with_vars[node.name][2],
+            operators_with_vars[node.name][1])
+
+  # Now we will recreate output graphdef with fixed nodes
+  def create_var_assign(old_var_node_def, graph_def):
+    """ Creates Variable and assign operators """
+
+    new_var = node_def_pb2.NodeDef()
+    new_var.CopyFrom(old_var_node_def)
+    new_var.name = old_var_node_def.name+"_recreated"
+
+    assign_op = node_def_pb2.NodeDef()
+    assign_op.name = old_var_node_def.name+"_assign"
+    assign_op.op = "AssignVariableOp"
+    inputs_to_assign = [new_var.name+":0", old_var_node_def.name+":0"]
+    assign_op.input.extend(inputs_to_assign)
+    assign_op.attr["dtype"].CopyFrom(new_var.attr["dtype"])
+
+    graph_def.node.append(new_var)
+    graph_def.node.append(assign_op)
+    return new_var.name, assign_op.name
+
+  new_output_graph_def = graph_pb2.GraphDef()
+  how_many_converted = 0
+  for input_node in output_graph_def.node:
+    output_node = node_def_pb2.NodeDef()
+    output_node.CopyFrom(input_node)
+    if input_node.name in filtered_operators:
+      if filtered_operators[input_node.name][0] not in recreated_vars:
+        # Create var assign
+        new_var_name, assign_name = create_var_assign(
+            variables[filtered_operators[input_node.name][0]],
+            new_output_graph_def)
+        recreated_vars[filtered_operators[input_node.name][0]] = (
+            new_var_name, assign_name)
+      output_node.input[filtered_operators[input_node.name][1]] = \
+        recreated_vars[filtered_operators[input_node.name][0]][0]
+      output_node.input.append(
+          "^"+recreated_vars[filtered_operators[input_node.name][0]][1])
+      how_many_converted += 1
+
+    else:
+      output_node.CopyFrom(input_node)
+    new_output_graph_def.node.append(output_node)
+
+  logging.info("Fixed %d type mismatches.", how_many_converted)
+  return new_output_graph_def
 
 
 @deprecation.deprecated(

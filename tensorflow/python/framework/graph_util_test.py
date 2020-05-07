@@ -29,6 +29,7 @@ from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import function
 from tensorflow.python.framework import graph_util
 from tensorflow.python.framework import importer
+from tensorflow.python.framework import indexed_slices
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import tensor_util
 from tensorflow.python.framework import test_util
@@ -512,6 +513,40 @@ class ConvertVariablesToConstantsTest(test.TestCase):
               sess, variable_graph_def, ["output_node"])
 
     self._ensure_no_variables_in_graph(constant_graph_def)
+
+  def testGraphWithResourceScatter(self):
+    """ Freezes a graph which contains resource scatter op """
+    frozen_value = None
+    value = None
+    frozen_graph = None
+    with ops.Graph().as_default():
+      with variable_scope.variable_scope("", use_resource=True):
+        x = variable_scope.get_variable("var_x", initializer=1.0)
+        y = x.scatter_add(indexed_slices.IndexedSlices([1], [0]))
+        z = math_ops_lib.multiply(y, 2.0, name="output_node")
+        with session.Session() as sess:
+          sess.run(variables.global_variables_initializer())
+          value = sess.run(z)
+
+          variable_graph_def = sess.graph.as_graph_def()
+          frozen_graph = graph_util.convert_variables_to_constants(
+              sess, variable_graph_def, ["output_node"])
+          with self.assertRaisesRegexp(
+              ValueError,
+              "Input 0 of node ResourceScatterAdd was passed float from"
+              ".+:0 incompatible with expected resource"):
+            with ops.Graph().as_default() as graph:
+              importer.import_graph_def(frozen_graph, name="")
+
+          frozen_graph = graph_util.convert_variables_to_constants(
+              sess, variable_graph_def, ["output_node"],
+              check_and_revert_if_type_mistmatch=True)
+
+    with ops.Graph().as_default() as graph:
+      importer.import_graph_def(frozen_graph, name="")
+      with session.Session(graph=graph) as sess:
+        frozen_value = sess.run("output_node:0")
+    assert frozen_value == value
 
 
 if __name__ == "__main__":
