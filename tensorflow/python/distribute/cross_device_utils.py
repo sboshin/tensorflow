@@ -20,6 +20,7 @@ from __future__ import print_function
 
 import collections as pycoll
 import threading
+import traceback
 
 from tensorflow.python.distribute import all_reduce
 from tensorflow.python.distribute import values as value_lib
@@ -273,6 +274,7 @@ class CollectiveKeys(object):
     assert op_instance_key_start != variable_instance_key_start
     self._op_instance_key_start = op_instance_key_start
     self._variable_instance_key = variable_instance_key_start
+    self._get_thread_local_object().op_instance_key = op_instance_key_start
 
   def _get_thread_local_object(self):
     # We make instance key without key ids thread local so that it will work
@@ -322,6 +324,8 @@ class CollectiveKeys(object):
     """Returns a new instance key for use in defining a collective op."""
     v = self._get_thread_local_object().op_instance_key
     self._get_thread_local_object().op_instance_key += 1
+    print("Returning op_instance key as ",v)
+    #traceback.print_stack()
     return v
 
   def get_variable_instance_key(self):
@@ -372,6 +376,7 @@ def build_collective_reduce(input_tensors,
           'collectives requires async executors for each device in eager mode')
 
   group_size = len(input_tensors) * num_workers
+  logging.warning("\n\n\n\n This is the group size %d \n\n\n\n"%(group_size))
   if group_size < 2:
     return input_tensors
   group_key = collective_keys.get_group_key_of_tensors(input_tensors)

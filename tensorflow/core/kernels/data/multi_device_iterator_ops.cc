@@ -98,6 +98,10 @@ class MultiDeviceIterator : public ResourceBase {
     return Status::OK();
   }
 
+  Status Save(SerializationContext* ctx, IteratorStateWriter* writer) {
+    return multi_device_buffer_->Save(ctx, writer);
+  }
+
   Status GetNextFromShard(OpKernelContext* ctx, int shard_num,
                           int64 incarnation_id,
                           MultiDeviceIteratorCallback callback) {
@@ -167,6 +171,11 @@ class MultiDeviceIterator : public ResourceBase {
         if (!background_thread_started_) return;
       }
       Reset();
+    }
+
+    Status Save(SerializationContext* ctx, IteratorStateWriter* writer) {
+      VLOG(0) << host_iterator_->prefix();
+      return host_iterator_->Save(ctx, writer);
     }
 
     void Reset() TF_LOCKS_EXCLUDED(mu_) {
@@ -589,6 +598,90 @@ REGISTER_KERNEL_BUILDER(Name("MultiDeviceIteratorInit").Device(DEVICE_CPU),
                         MultiDeviceIteratorInitOp);
 
 // Calls GetNextFromShard(shard) and returns a vector of Tensors as output.
+class MultiDeviceIteratorFixShardNumInShardOp : public OpKernel {
+ public:
+  explicit MultiDeviceIteratorFixShardNumInShardOp(OpKernelConstruction* ctx)
+      : OpKernel(ctx) {}
+
+  void Compute(OpKernelContext* ctx) override {
+    // Save previous iterator
+    // MakeIteratorFromCheckpoint using the new database
+
+    const Tensor* tensor_max_buffer_size;
+    OP_REQUIRES_OK(ctx, ctx->input("max_buffer_size", &tensor_max_buffer_size));
+    int64 max_buffer_size = tensor_max_buffer_size->scalar<int64>()();
+
+    DatasetBase* dataset;
+    OP_REQUIRES_OK(ctx, GetDatasetFromVariantTensor(ctx->input(0), &dataset));
+    core::RefCountPtr<MultiDeviceIterator> resource;
+    OP_REQUIRES_OK(ctx,
+                   LookupResource(ctx, HandleFromInput(ctx, 1), &resource));
+
+    // Save the Internal iterator inside the resource
+    SerializationContext::Params sparams;
+    sparams.external_state_policy =
+        SerializationContext::ExternalStatePolicy(1);
+    VariantTensorDataWriter writer;
+    SerializationContext serialization_ctx(sparams);
+    resource->Save(&serialization_ctx, &writer);
+
+    std::vector<std::unique_ptr<VariantTensorData>> data;
+    std::vector<const VariantTensorData*> rdata;
+
+    writer.GetData(&rdata);
+    writer.ReleaseData(&data);
+
+    std::unique_ptr<IteratorStateReader> reader =
+        absl::make_unique<VariantTensorDataReader>(rdata);
+
+    // for (auto& d : data) {
+    //   VLOG(0) << d->metadata_string();
+    // }
+
+    // VLOG(0) << "Pringint RDATA";
+    // for (auto& d : rdata) {
+    //   VLOG(0) << d->metadata_string();
+    // }
+    std::unique_ptr<IteratorBase> iterator;
+    IteratorContext::Params params(ctx);
+    params.flr = resource->flr();
+    params.function_handle_cache = resource->function_handle_cache();
+    params.resource_mgr = resource->resource_mgr();
+    params.cancellation_manager = resource->cancellation_manager();
+    std::function<void()> deregister_fn;
+    OP_REQUIRES_OK(
+        ctx, RegisterCancellationCallback(
+                 ctx->cancellation_manager(),
+                 [cm = params.cancellation_manager]() { cm->StartCancel(); },
+                 &deregister_fn));
+    auto cleanup = gtl::MakeCleanup(std::move(deregister_fn));
+
+    // IteratorContext iter_ctx(std::move(params));
+    // OP_REQUIRES_OK(
+    //    ctx, dataset->MakeIterator(std::move(iter_ctx), /*parent=*/nullptr,
+    //                               "Iterator", &iterator));
+    // VLOG(0) << dataset->DebugString();
+    OP_REQUIRES_OK(ctx, dataset->MakeIteratorFromCheckpoint(
+                            IteratorContext(std::move(params)), "Iterator",
+                            reader.get(), &iterator));
+    int64 incarnation_id;
+    VLOG(0) << "Created Iterator";
+    OP_REQUIRES_OK(ctx, resource->Init(std::move(iterator), max_buffer_size,
+                                       &incarnation_id));
+    VLOG(0) << "Init MultiIterator Resource";
+    Tensor tensor_incarnation_id(DT_INT64, TensorShape({}));
+    tensor_incarnation_id.scalar<int64>()() = incarnation_id;
+    OP_REQUIRES_OK(ctx,
+                   ctx->set_output("incarnation_id", tensor_incarnation_id));
+    VLOG(0) << "Finished fixing num_shards";
+  }
+};
+
+REGISTER_KERNEL_BUILDER(
+    Name("MultiDeviceIteratorFixShardNumInShard").Device(DEVICE_CPU),
+    MultiDeviceIteratorFixShardNumInShardOp);
+
+// Calls GetNextFromShard(shard) and returns a vector of Tensors as output.
 class MultiDeviceIteratorGetNextFromShardOp : public AsyncOpKernel {
  public:
   explicit MultiDeviceIteratorGetNextFromShardOp(OpKernelConstruction* ctx)
@@ -605,6 +698,8 @@ class MultiDeviceIteratorGetNextFromShardOp : public AsyncOpKernel {
     OP_REQUIRES_OK_ASYNC(
         ctx, ctx->input("incarnation_id", &tensor_incarnation_id), done);
     int64 incarnation_id = tensor_incarnation_id->scalar<int64>()();
+
+    VLOG(0) << "Incarnation id is " << incarnation_id;
 
     MultiDeviceIterator* iterator;
     OP_REQUIRES_OK_ASYNC(

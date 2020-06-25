@@ -27,6 +27,7 @@ py_library(
         ":slurm_cluster_resolver_py",
         ":tfconfig_cluster_resolver_py",
         ":tpu_cluster_resolver_py",
+        ":elastic_cluster_resolver_py",
         "//tensorflow/python:util",
     ],
 )
@@ -53,6 +54,16 @@ py_library(
 py_library(
     name = "tfconfig_cluster_resolver_py",
     srcs = ["tfconfig_cluster_resolver.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        ":base_cluster_resolver_py",
+        "//tensorflow/python:training_server_lib",
+    ],
+)
+
+py_library(
+    name = "elastic_cluster_resolver_py",
+    srcs = ["elastic_cluster_resolver.py"],
     srcs_version = "PY2AND3",
     deps = [
         ":base_cluster_resolver_py",

@@ -123,6 +123,8 @@ class ShardDatasetOp::Dataset : public DatasetBase {
                            bool* end_of_sequence) override {
       mutex_lock l(mu_);
 
+      VLOG(0) << "Dataset num_shards is " << dataset()->num_shards_;
+
       if (!input_impl_) {
         *end_of_sequence = true;
         return Status::OK();
@@ -172,6 +174,7 @@ class ShardDatasetOp::Dataset : public DatasetBase {
     Status SaveInternal(SerializationContext* ctx,
                         IteratorStateWriter* writer) override {
       mutex_lock l(mu_);
+      VLOG(0) << input_impl_->prefix();
       if (!input_impl_) {
         TF_RETURN_IF_ERROR(writer->WriteScalar(full_name(kInputImplEmpty), ""));
       } else {
@@ -186,9 +189,12 @@ class ShardDatasetOp::Dataset : public DatasetBase {
                            IteratorStateReader* reader) override {
       mutex_lock l(mu_);
       if (!reader->Contains(full_name(kInputImplEmpty))) {
+        VLOG(0) << "Starting Restoring the input";
         TF_RETURN_IF_ERROR(RestoreInput(ctx, reader, input_impl_));
+        VLOG(0) << "Finished Restoring the input";
         TF_RETURN_IF_ERROR(
             reader->ReadScalar(full_name(kNextIndex), &next_index_));
+        VLOG(0) << "Finished Reading NextIndex";
       } else {
         input_impl_.reset();
       }

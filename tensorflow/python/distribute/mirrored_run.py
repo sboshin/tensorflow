@@ -91,7 +91,10 @@ def call_for_each_replica(strategy, fn, args=None, kwargs=None):
     # _call_for_each_replica itself (TF library functions are whitelisted).
     # This makes sure that the Python function that originally passed to
     # the tf.function is still converted.
+    import time
+    start = time.time()
     fn = autograph.tf_convert(fn, autograph_ctx.control_status_ctx())
+    logging.warning("Time taken to tf_convert fn is %f"%(time.time() - start))
 
   return _call_for_each_replica(strategy, fn, args, kwargs)
 

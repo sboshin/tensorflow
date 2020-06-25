@@ -887,6 +887,7 @@ class Model(network.Network, version_utils.ModelVersionSelector):
       self._train_counter.assign(0)
       callbacks.on_train_begin()
       training_logs = None
+      prev_cluster_spec = self.distribute_strategy._extended._cluster_resolver.cluster_spec()
       # Handle fault-tolerance for multi-worker.
       # TODO(omalleyt): Fix the ordering issues that mean this has to
       # happen after `callbacks.on_train_begin`.
@@ -910,6 +911,12 @@ class Model(network.Network, version_utils.ModelVersionSelector):
               logs = tmp_logs  # No error, now safe to assign to logs.
               end_step = step + data_handler.step_increment
               callbacks.on_train_batch_end(end_step, logs)
+              if prev_cluster_spec != self.distribute_strategy._extended._cluster_resolver.cluster_spec():
+                import time
+                time.sleep(1)
+                self.distribute_strategy.extended.update_cluster()
+                prev_cluster_spec = self.distribute_strategy._extended._cluster_resolver.cluster_spec()
+        epoch_logs = copy.copy(logs)
         epoch_logs = copy.copy(logs)
 
         # Run validation.

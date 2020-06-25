@@ -522,10 +522,12 @@ class OwnedMultiDeviceIterator(composite_tensor.CompositeTensor):
       self._devices = devices
       self._source_device = source_device
       source_device_tensor = ops.convert_to_tensor(self._source_device)
-
       if prefetch_buffer_size > max_buffer_size:
         max_buffer_size = prefetch_buffer_size
 
+      self._max_buffer_size = max_buffer_size
+      self._prefetch_buffer_size = prefetch_buffer_size
+      
       # Create the MultiDeviceIterator.
       with ops.device(self._source_device):
         self._multi_device_iterator_resource, self._deleter = (
@@ -534,6 +536,7 @@ class OwnedMultiDeviceIterator(composite_tensor.CompositeTensor):
 
         # The incarnation ID is used to ensure consistency between the
         # per-device iterators and the multi-device iterator.
+        self._dataset = dataset
         incarnation_id = gen_dataset_ops.multi_device_iterator_init(
             dataset._variant_tensor,  # pylint: disable=protected-access
             self._multi_device_iterator_resource,
@@ -568,6 +571,40 @@ class OwnedMultiDeviceIterator(composite_tensor.CompositeTensor):
           iterators=iterator_handles,
           device=self._source_device,
           deleter=self._deleter)
+  def reshard_iterator(self, dataset):
+    with ops.device(self._source_device):
+      # The incarnation ID is used to ensure consistency between the
+      # per-device iterators and the multi-device iterator.
+      incarnation_id = gen_dataset_ops.multi_device_iterator_fix_shard_num_in_shard(
+          dataset._variant_tensor,  # pylint: disable=protected-access
+          self._multi_device_iterator_resource,
+          max_buffer_size=self._max_buffer_size)
+    source_device_tensor = ops.convert_to_tensor(self._source_device)
+    experimental_slack = dataset.options().experimental_slack
+    prototype_device_datasets = []
+    for i, device in enumerate(self._devices):
+      with ops.device(device):
+        ds = _PerDeviceGenerator(i, self._multi_device_iterator_resource,
+                                  incarnation_id, source_device_tensor,
+                                  dataset.element_spec)
+        prototype_device_datasets.append(ds)
+
+    # TODO(rohanj): Explore the possibility of the MultiDeviceIterator to
+    # initialize the device side of the pipeline. This would allow the
+    # MultiDeviceIterator to choose, for example, to move some transformations
+    # into the device side from its input. It might be useful in rewriting.
+    # Create the per device iterators.
+    self._device_iterators = []
+    iterator_handles = []
+    for i, device in enumerate(self._devices):
+      with ops.device(device):
+        ds = _create_device_dataset(prototype_device_datasets[i],
+                                    incarnation_id, self._prefetch_buffer_size,
+                                    experimental_slack)
+        iterator = iter(ds)
+        self._device_iterators.append(iterator)
+        iterator_handles.append(iterator._iterator_resource)  # pylint: disable=protected-access
+    
 
   def get_next(self, device=None):
     """Returns the next element given a `device`, else returns all in a list."""

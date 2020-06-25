@@ -535,6 +535,8 @@ class DistributedIterator(DistributedIteratorBase,
 
   def __init__(self, input_workers=None, iterators=None, strategy=None,
                components=None, element_spec=None):
+    import time
+    start = time.time()
     if input_workers is None:
       raise ValueError("`input_workers` should be "
                        "provided.")
@@ -562,6 +564,7 @@ class DistributedIterator(DistributedIteratorBase,
 
       super(DistributedIterator, self).__init__(input_workers, iterators,
                                                 strategy)
+    print("\nDistributed Iterator initialization %f\n"%(time.time() - start))
 
   @property
   def element_spec(self):

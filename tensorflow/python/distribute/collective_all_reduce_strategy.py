@@ -20,6 +20,7 @@ from __future__ import print_function
 
 import copy
 import weakref
+import time
 
 from tensorflow.core.protobuf import config_pb2
 from tensorflow.core.protobuf import rewriter_config_pb2
@@ -175,6 +176,9 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
     self._communication = communication
     self._initialize_strategy(self._cluster_resolver)
     self._cfer_fn_cache = weakref.WeakKeyDictionary()
+    #Timings
+    self._var_init_timing = 0
+    
     assert isinstance(self._get_cross_device_ops(),
                       cross_device_ops_lib.CollectiveAllReduce)
 

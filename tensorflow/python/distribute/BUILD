@@ -386,6 +386,29 @@ py_library(
 )
 
 py_library(
+    name = "elastic_collective_all_reduce_strategy",
+    srcs = ["elastic_collective_all_reduce_strategy.py"],
+    visibility = ["//tensorflow:internal"],
+    deps = [
+        ":collective_all_reduce_strategy",
+        ":cross_device_ops",
+        ":cross_device_utils",
+        ":input_lib",
+        ":mirrored_strategy",
+        ":multi_worker_util",
+        ":numpy_dataset",
+        ":values",
+        "//tensorflow/core:protos_all_py",
+        "//tensorflow/python:array_ops",
+        "//tensorflow/python:collective_ops",
+        "//tensorflow/python:framework_ops",
+        "//tensorflow/python:training",
+        "//tensorflow/python/distribute/cluster_resolver:cluster_resolver_lib",
+        "//tensorflow/python/eager:context",
+    ],
+)
+
+py_library(
     name = "mirrored_function_strategy",
     srcs = ["mirrored_function_strategy.py"],
     deps = [
@@ -1516,6 +1539,41 @@ cuda_py_test(
     xla_enable_strict_auto_jit = True,
     deps = [
         ":collective_all_reduce_strategy",
+        ":combinations",
+        ":cross_device_utils",
+        ":multi_worker_test_base",
+        ":strategy_combinations",
+        ":strategy_test_lib",
+        "//tensorflow/core:protos_all_py",
+        "//tensorflow/python:array_ops",
+        "//tensorflow/python:client_testlib",
+        "//tensorflow/python:constant_op",
+        "//tensorflow/python:dtypes",
+        "//tensorflow/python:framework_ops",
+        "//tensorflow/python:gradients",
+        "//tensorflow/python:init_ops",
+        "//tensorflow/python:variable_scope",
+        "//tensorflow/python:variables",
+        "//tensorflow/python/eager:context",
+        "//tensorflow/python/estimator:estimator_py",
+        "//tensorflow/python/keras/layers",
+        "//tensorflow/python/keras/mixed_precision/experimental:test_util",
+        "//third_party/py/numpy",
+        "@absl_py//absl/testing:parameterized",
+    ],
+)
+
+cuda_py_test(
+    name = "elastic_collective_all_reduce_strategy_test",
+    srcs = ["elastic_collective_all_reduce_strategy_test.py"],
+    tags = [
+        "multi_and_single_gpu",
+    ],
+    # b/155301154 broken with XLA:GPU
+    xla_enable_strict_auto_jit = True,
+    deps = [
+        ":collective_all_reduce_strategy",
+        ":elastic_collective_all_reduce_strategy",
         ":combinations",
         ":cross_device_utils",
         ":multi_worker_test_base",

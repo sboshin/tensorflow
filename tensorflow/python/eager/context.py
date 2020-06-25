@@ -449,6 +449,8 @@ class Context(object):
     self._optimizer_experimental_options = {}
 
     _python_eager_context_create_counter.get_cell().increase_by(1)
+
+    self._added_fns = []
   # pylint: enable=redefined-outer-name
 
   def _set_global_seed(self, seed):
@@ -1080,6 +1082,13 @@ class Context(object):
       fn: A wrapped TF_Function (returned from TF_GraphToFunction_wrapper).
     """
     self.ensure_initialized()
+    with c_api_util.tf_buffer() as buffer_:
+      pywrap_tf_session.TF_FunctionToFunctionDef(fn, buffer_)
+      proto_data = pywrap_tf_session.TF_GetBuffer(buffer_)
+    function_def = function_pb2.FunctionDef()
+    function_def.ParseFromString(compat.as_bytes(proto_data))
+    name = compat.as_bytes(function_def.signature.name)
+    self._added_fns.append(name)
     pywrap_tfe.TFE_ContextAddFunction(self._handle, fn)
 
   def add_function_def(self, fdef):
@@ -1092,6 +1101,7 @@ class Context(object):
       fdef: A FunctionDef protocol buffer message.
     """
     self.ensure_initialized()
+    self._added_fns.append(compat.as_bytes(fdef.signature.name))
     fdef_string = fdef.SerializeToString()
     pywrap_tfe.TFE_ContextAddFunctionDef(self._handle, fdef_string,
                                          len(fdef_string))
@@ -1134,6 +1144,27 @@ class Context(object):
     self.ensure_initialized()
     pywrap_tfe.TFE_ContextRemoveFunction(self._handle, name)
 
+  def update_group_size(self, group_size):
+    modified_fns = []
+    for each in self._added_fns:
+      if(self.has_function(each)):
+        f_def = self.get_function_def(each)
+        modified = False
+        for node in f_def.node_def:
+          if(node.op == "CollectiveReduce"):
+            modified = True
+            for attr_name in node.attr:
+              if(attr_name == "group_size"):
+                node.attr[attr_name].i = group_size
+        #print("Function def is ",f_def)
+        if(modified):
+          self.remove_function(each)
+          modified_fns.append((each, f_def))
+    for each in modified_fns:
+      self._added_fns.remove(each[0])
+      self.add_function_def(each[1])
+    
+  
   def has_function(self, name):
     """Check if a function `name` is registered."""
     self.ensure_initialized()

@@ -985,6 +985,13 @@ REGISTER_OP("MultiDeviceIteratorInit")
     .Output("incarnation_id: int64")
     .SetShapeFn(shape_inference::ScalarShape);
 
+REGISTER_OP("MultiDeviceIteratorFixShardNumInShard")
+    .Input("dataset: variant")
+    .Input("multi_device_iterator: resource")
+    .Input("max_buffer_size: int64")
+    .Output("incarnation_id: int64")
+    .SetShapeFn(shape_inference::ScalarShape);
+
 REGISTER_OP("MultiDeviceIteratorGetNextFromShard")
     .Input("multi_device_iterator: resource")
     .Input("shard_num: int32")

@@ -18,7 +18,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import copy
+import copy, time
 
 from tensorflow.python.distribute import cross_device_ops as cross_device_ops_lib
 from tensorflow.python.distribute import device_util
@@ -312,6 +312,9 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
     self._cross_device_ops = cross_device_ops
     self._initialize_strategy(devices)
 
+    #Timings
+    self._var_create_timing = 0
+
     # TODO(b/128995245): Enable last partial batch support in graph mode.
     if ops.executing_eagerly_outside_functions():
       self.experimental_enable_get_next_as_optional = True
@@ -411,6 +414,7 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
 
   def _create_variable(self, next_creator, **kwargs):
     """Create a mirrored variable. See `DistributionStrategy.scope`."""
+    start = time.time()
     colocate_with = kwargs.pop("colocate_with", None)
     if colocate_with is None:
       devices = self._devices
@@ -445,10 +449,12 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
           value_list.append(v)
       return value_list
 
-    return values.create_mirrored_variable(self._container_strategy(),
+    ret = values.create_mirrored_variable(self._container_strategy(),
                                            _real_mirrored_creator,
                                            values.MirroredVariable,
                                            values.SyncOnReadVariable, **kwargs)
+    self._var_create_timing += time.time() - start
+    return ret
 
   def _validate_colocate_with_variable(self, colocate_with_variable):
     values.validate_colocate_distributed_variable(colocate_with_variable, self)
@@ -476,11 +482,14 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
                                            self._container_strategy())
 
   def _experimental_distribute_dataset(self, dataset):
-    return input_lib.get_distributed_dataset(
+    start = time.time()
+    dataset = input_lib.get_distributed_dataset(
         dataset,
         self._input_workers,
         self._container_strategy(),
         split_batch_by=self._num_replicas_in_sync)
+    logging.warning("Getting distribute dataset took %f"%(time.time() - start))
+    return dataset
 
   def _experimental_make_numpy_dataset(self, numpy_input, session):
     return numpy_dataset.one_host_numpy_dataset(
